@@ -1,8 +1,8 @@
-# --- AI Core (Versi Stabil & Aman) ---
-torch==2.2.1
-torchvision==0.17.1
-ultralytics==8.1.24
+# --- AI Core (Versi Baru untuk support C3k2) ---
 numpy==1.26.4
+ultralytics==8.3.40
+torch==2.4.1
+torchvision==0.19.1
 pillow==10.2.0
 opencv-python-headless==4.9.0.80
 
