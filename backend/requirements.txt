@@ -1,6 +1,6 @@
-# --- AI Core (Versi Baru untuk support C3k2) ---
+# --- AI Core (YOLO12 Support) ---
 numpy==1.26.4
-ultralytics==8.3.40
+ultralytics
 torch==2.4.1
 torchvision==0.19.1
 pillow==10.2.0
