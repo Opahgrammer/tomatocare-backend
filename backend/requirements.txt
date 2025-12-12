@@ -1,27 +1,27 @@
-# --- Core Framework ---
+# --- AI Core (Versi Stabil & Aman) ---
+torch==2.2.1
+torchvision==0.17.1
+ultralytics==8.1.24
+numpy==1.26.4
+pillow==10.2.0
+opencv-python-headless==4.9.0.80
+
+# --- Web Framework ---
 fastapi==0.110.0
 uvicorn==0.27.1
-python-dotenv==1.0.1
 python-multipart==0.0.9
 requests==2.31.0
 
-# --- Database ---
+# --- Database & Auth ---
 sqlalchemy==2.0.27
 pymysql==1.1.0
-
-# --- Validation (Fix Error FieldInfo) ---
 pydantic==2.6.3
 pydantic-settings==2.2.1
 email-validator==2.1.1
-
-# --- Security (JWT & Hash) ---
+python-dotenv==1.0.1
 python-jose==3.3.0
 passlib==1.7.4
 bcrypt==4.1.2
 
-# --- AI & Image Processing (Fix Error NumPy) ---
-numpy==1.26.4
-ultralytics==8.1.24
-pillow==10.2.0
-opencv-python-headless==4.9.0.80
+# --- Cloud ---
 cloudinary==1.39.0
