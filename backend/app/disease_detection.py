@@ -1,108 +1,138 @@
 import numpy as np
 from ultralytics import YOLO
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Any
 from PIL import Image
 import os
+import io
 
 class DiseaseDetector:
-    """
-    Sebuah kelas untuk memuat model YOLOv8 dan melakukan deteksi penyakit.
-    """
     def __init__(self, model_path: str):
-        """
-        Inisialisasi detector dengan memuat model YOLO.
+        # --- MODEL 1: SPESIALIS (Model Skripsi Kamu) ---
+        self.disease_model = YOLO(model_path)
+        self.disease_classes = self.disease_model.names
         
-        Args:
-            model_path (str): Path menuju file model .pt Anda.
-        """
-        # Muat model YOLO dari path yang diberikan.
-        # Ini akan otomatis dijalankan di CPU atau GPU jika tersedia.
-        self.model = YOLO(model_path)
+        # --- MODEL 2: SATPAM UMUM (YOLO Standar / COCO) ---
+        # Model ini kenal 80 benda umum (Orang, HP, Laptop, dll)
+        # File ini akan didownload otomatis oleh Ultralytics saat pertama kali dijalankan
+        self.general_model = YOLO("yolov8n.pt") 
         
-        # Ambil daftar nama kelas langsung dari model yang sudah dilatih.
-        # Ini memastikan kelasnya selalu cocok dengan modelnya.
-        self.class_names = self.model.names
-        print("Model loaded successfully.")
-        print(f"Model classes: {list(self.class_names.values())}")
+        print("✅ Dua Model berhasil dimuat: General (yolov8n) & Spesialis (Custom).")
 
-    def detect_disease(self, image: Image.Image) -> Optional[Tuple[str, float]]:
+    def detect_disease(self, image: Image.Image) -> Optional[Tuple[str, float, Any]]:
         """
-        Mendeteksi penyakit dari objek gambar PIL.
-        
-        Args:
-            image (Image.Image): Objek gambar dari library PIL.
-            
-        Returns:
-            Optional[Tuple[str, float]]: Sebuah tuple berisi (nama_penyakit, confidence)
-                                         jika terdeteksi, atau None jika tidak ada yang terdeteksi.
+        Returns: (nama_penyakit, confidence, gambar_dengan_box)
         """
         try:
-            # Lakukan inferensi/prediksi menggunakan model.
-            results = self.model(image)
+            # ========================================================
+            # TAHAP 1: CEK BENDA ASING (SATPAM)
+            # ========================================================
+            # Kita suruh model umum menebak dulu
+            gen_results = self.general_model(image)
+            gen_result = gen_results[0]
+
+            if gen_result.boxes:
+                # Ambil deteksi paling yakin dari model umum
+                box = gen_result.boxes[0]
+                conf = float(box.conf)
+                cls_id = int(box.cls)
+                obj_name = self.general_model.names[cls_id] # misal: 'cell phone', 'person'
+
+                # Daftar benda yang HARUS DITOLAK (Blacklist)
+                # Jika YOLO melihat ini dengan yakin, langsung tolak.
+                blacklist = [
+                    'person', 'cell phone', 'mobile phone', 'mouse', 'keyboard', 
+                    'laptop', 'cup', 'bottle', 'remote', 'tv', 'car', 'monitor'
+                ]
+                
+                # Jika deteksinya yakin (>50%) DAN termasuk benda terlarang
+                if conf > 0.50 and obj_name in blacklist:
+                    print(f"🚫 BLOCKED by General Model: Terdeteksi '{obj_name}'")
+                    
+                    # GAMBAR KOTAK PADA BENDA ASING TERSEBUT
+                    # labels=False, conf=False -> Cuma kotak aja, tanpa teks
+                    plotted_array = gen_result.plot(line_width=4, labels=False, conf=False)
+                    plotted_image = Image.fromarray(plotted_array[..., ::-1])
+
+                    # PENTING: Kembalikan Confidence 0.0
+                    # Ini agar logika di main.py menganggapnya "Objek Tidak Dikenali"
+                    # Tapi gambarnya tetap ada kotaknya!
+                    return (f"Objek Asing ({obj_name})", 0.0, plotted_image)
+
+            # ========================================================
+            # TAHAP 2: CEK WARNA (BACKUP FILTER)
+            # ========================================================
+            # Jika lolos dari YOLO umum (misal objeknya tembok polos), cek warna.
+            if not self._is_plant_colored(image):
+                print("⚠️ Gagal Filter Warna: Gambar tidak dominan warna tanaman.")
+                # Kembalikan confidence 0.0, gambar asli (tanpa kotak)
+                return ("Bukan Daun Tomat", 0.0, image)
+
+            # ========================================================
+            # TAHAP 3: CEK PENYAKIT (SPESIALIS)
+            # ========================================================
+            # Kalau lolos Satpam & Cek Warna, baru pakai model kamu
             
-            # Proses hasil untuk mendapatkan deteksi terbaik.
-            return self._process_results(results)
+            results = self.disease_model(image)
+            result = results[0]
+            
+            # Cek apakah ada objek terdeteksi oleh model kamu
+            if not result.boxes:
+                return None
+            
+            box = result.boxes[0] 
+            confidence = float(box.conf)
+            class_id = int(box.cls)
+            disease_name = self.disease_classes[class_id]
+
+            # --- SOFT THRESHOLD (0.20) ---
+            # Biar kotak tetap muncul walau confidence rendah
+            MIN_THRESHOLD = 0.20 
+            if confidence < MIN_THRESHOLD:
+                print(f"Deteksi diabaikan: Confidence terlalu rendah ({confidence:.2f})")
+                return None 
+
+            # GENERATE BOUNDING BOX PENYAKIT
+            # labels=False, conf=False -> Bersih, cuma kotak
+            plotted_array = result.plot(line_width=4, labels=False, conf=False) 
+            plotted_image = Image.fromarray(plotted_array[..., ::-1]) 
+
+            return (disease_name, confidence, plotted_image)
             
         except Exception as e:
-            print(f"Error during disease detection: {e}")
+            print(f"Error detection: {e}")
             return None
 
-    def _process_results(self, results) -> Optional[Tuple[str, float]]:
+    def _is_plant_colored(self, image: Image.Image) -> bool:
+        """ 
+        Mengecek apakah gambar memiliki spektrum warna daun (Hijau/Kuning/Coklat).
+        Berguna sebagai backup jika Model Umum gagal mendeteksi objek asing.
         """
-        Memproses hasil output dari model YOLOv8.
-        Fungsi ini akan mencari deteksi dengan confidence score tertinggi.
-        """
-        best_detection = None
-        # 👇 Atur ambang batas kepercayaan minimal di sini (misal: 0.10 untuk 10%)
-        min_confidence_threshold = 0.10 
-        max_confidence = min_confidence_threshold # Mulai dari ambang batas
+        try:
+            # Resize kecil agar hitungan cepat
+            img_small = image.resize((50, 50)).convert('HSV')
+            img_array = np.array(img_small)
+            
+            # Ambil channel Hue (Warna) dan Saturation (Kepekatan)
+            h = img_array[:, :, 0]
+            s = img_array[:, :, 1]
+            
+            # Rentang Warna Tanaman di HSV (OpenCV scale H:0-180)
+            # Kita ambil range luas: 10 (Coklat/Kuning) s.d 90 (Hijau Tua)
+            plant_mask = ((h > 10) & (h < 90) & (s > 40))
+            
+            # Hitung rasio piksel tanaman
+            plant_ratio = np.sum(plant_mask) / (50 * 50)
+            
+            # Minimal 15% gambar harus berwarna tanaman
+            return plant_ratio > 0.15
 
-        for result in results:
-            if result.boxes:
-                for box in result.boxes:
-                    confidence = float(box.conf)
-                    # Hanya pertimbangkan deteksi di atas ambang batas
-                    # dan yang lebih baik dari deteksi terbaik saat ini
-                    if confidence > max_confidence:
-                        max_confidence = confidence
-                        class_id = int(box.cls)
-                        disease_name = self.class_names[class_id]
-                        best_detection = (disease_name, max_confidence)
-                        
-        return best_detection
+        except Exception:
+            return True # Jika error, loloskan saja (fail-open)
 
-# --- CARA MENGGUNAKANNYA DI APLIKASI ANDA ---
-
-# 1. Simpan file model Anda (misal: 'best.pt') di dalam folder backend.
-#    Contoh: backend/app/models/best.pt
-MODEL_FILE_PATH = os.path.join(os.path.dirname(__file__), "models", "best.pt") # Ganti 'yolov8n.pt' dengan nama file model Anda
-
-# 2. Buat satu instance global dari detector yang akan digunakan di seluruh aplikasi.
-#    Ini mencegah model dimuat ulang setiap kali ada request.
-#    Pastikan file modelnya ada di path yang benar!
+# Setup Global Detector
+MODEL_FILE_PATH = os.path.join(os.path.dirname(__file__), "models", "best.pt")
 try:
     detector = DiseaseDetector(model_path=MODEL_FILE_PATH)
 except Exception as e:
     print(f"Failed to load model: {e}")
     detector = None
-
-# 3. Contoh Pengujian (bisa Anda hapus jika tidak perlu)
-if __name__ == '__main__':
-    # Pastikan Anda punya gambar contoh di path ini untuk pengujian
-    test_image_path = 'path/to/your/test/image.jpg' 
-    if os.path.exists(test_image_path) and detector:
-        print(f"\nTesting with image: {test_image_path}")
-        img = Image.open(test_image_path)
-        detection_result = detector.detect_disease(img)
-        
-        if detection_result:
-            disease, conf = detection_result
-            print(f"✅ Detection successful!")
-            print(f"   Disease: {disease}")
-            print(f"   Confidence: {conf:.2%}")
-        else:
-            print("❌ No disease detected in the image.")
-    elif not detector:
-        print("Detector could not be initialized. Check model path and file.")
-    else:
-        print(f"Test image not found at '{test_image_path}'. Please provide a valid path to test.")
